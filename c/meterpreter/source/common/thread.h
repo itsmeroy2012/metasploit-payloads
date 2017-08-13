@@ -1,8 +1,6 @@
 #ifndef _METERPRETER_LIB_THREAD_H
 #define _METERPRETER_LIB_THREAD_H
 
-#ifdef _WIN32
-
 /*****************************************************************************************/
 // Win32/64 specific definitions...
 
@@ -35,17 +33,9 @@ typedef DWORD (WINAPI * NTOPENTHREAD)( PHANDLE, ACCESS_MASK, _POBJECT_ATTRIBUTES
 
 /*****************************************************************************************/
 
-#else
-#include "pthread.h"
-#endif // _WIN32
-
 typedef struct _LOCK
 {
-#ifdef _WIN32
 	HANDLE handle;
-#else
-	pthread_mutex_t *handle;
-#endif // _WIN32
 } LOCK, * LPLOCK;
 
 typedef struct _EVENT
@@ -53,28 +43,22 @@ typedef struct _EVENT
 	HANDLE handle;
 } EVENT, * LPEVENT;
 
-typedef struct _THREAD
+#define THREADCALL __stdcall
+
+typedef DWORD (THREADCALL * THREADFUNK)(struct _THREAD * thread);
+
+struct _THREAD
 {
 	DWORD id;
 	HANDLE handle;
 	EVENT * sigterm;
+	THREADFUNK funk;
 	LPVOID parameter1;
 	LPVOID parameter2;
 	LPVOID parameter3;
-#ifndef _WIN32
-	void *suspend_thread_data;
-	pthread_t pid;
-	int thread_started;
-#endif
-} THREAD, * LPTHREAD;
+};
 
-#ifdef __GNUC__
-#define THREADCALL __attribute__((stdcall))
-#else // ! gcc
-#define THREADCALL __stdcall
-#endif
-
-typedef DWORD (THREADCALL * THREADFUNK)( THREAD * thread );
+typedef struct _THREAD THREAD, * LPTHREAD;
 
 /*****************************************************************************************/
 
@@ -101,6 +85,8 @@ BOOL event_poll( EVENT * event, DWORD timeout );
 THREAD * thread_open( VOID );
 
 THREAD * thread_create( THREADFUNK funk, LPVOID param1, LPVOID param2, LPVOID param3 );
+
+void disable_thread_error_reporting(void);
 
 BOOL thread_run( THREAD * thread );
 

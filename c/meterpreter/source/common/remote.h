@@ -5,7 +5,6 @@
 #ifndef _METERPRETER_LIB_REMOTE_H
 #define _METERPRETER_LIB_REMOTE_H
 
-#include "crypto.h"
 #include "thread.h"
 #include "config.h"
 
@@ -17,13 +16,8 @@
 /*! @brief This is the size of the certificate hash that is validated (sha1) */
 #define CERT_HASH_SIZE 20
 
-#ifdef _WIN32
 typedef wchar_t CHARTYPE;
 typedef CHARTYPE* STRTYPE;
-#else
-typedef char CHARTYPE;
-typedef CHARTYPE* STRTYPE;
-#endif
 
 // Forward declarations required to keep compilers happy.
 typedef struct _Packet Packet;
@@ -64,7 +58,6 @@ typedef struct _TimeoutSettings
 	UINT retry_wait;
 } TimeoutSettings;
 
-#ifdef _WIN32
 typedef struct _SslLib
 {
 	int(*RAND_status)();
@@ -194,7 +187,6 @@ typedef struct _SslLib
 	const char*(*X509_get_default_cert_dir_env)();
 	const char*(*X509_get_default_cert_file_env)();
 } SslLib;
-#endif
 
 typedef struct _TcpTransportContext
 {
@@ -267,8 +259,6 @@ typedef struct _Remote
 {
 	HMODULE met_srv;                      ///! Reference to the Meterpreter server instance.
 
-	CryptoContext* crypto;                ///! Cryptographic context associated with the connection.
-
 	PConfigCreate config_create;          ///! Pointer to the function that will create a configuration block from the curren setup.
 
 	Transport* transport;                 ///! Pointer to the currently used transport mechanism in a circular list of transports
@@ -288,10 +278,8 @@ typedef struct _Remote
 	char* orig_station_name;              ///! Original station name.
 	char* curr_station_name;              ///! Name of the current station.
 
-#ifdef _WIN32
 	char* orig_desktop_name;              ///! Original desktop name.
 	char* curr_desktop_name;              ///! Name of the current desktop.
-#endif
 
 	PTransportCreate trans_create;        ///! Helper to create transports from configuration.
 	PTransportRemove trans_remove;        ///! Helper to remove transports from the current session.
@@ -300,17 +288,12 @@ typedef struct _Remote
 	int sess_expiry_end;                  ///! Unix timestamp for when the server should shut down.
 	int sess_start_time;                  ///! Unix timestamp representing the session startup time.
 
-#ifdef _WIN32
 	SslLib ssl;                           ///! Pointer to SSL related functions, for sharing across extensions.
-#endif
 } Remote;
 
 Remote* remote_allocate();
 VOID remote_deallocate(Remote *remote);
 
 VOID remote_set_fd(Remote *remote, SOCKET fd);
-
-DWORD remote_set_cipher(Remote *remote, LPCSTR cipher, struct _Packet *initializer);
-CryptoContext *remote_get_cipher(Remote *remote);
 
 #endif
